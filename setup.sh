@@ -4,7 +4,7 @@
 #   1. Sécurisation (SSH, firewall, fail2ban, utilisateur sudo)
 #   2. Installation de Docker & Docker Compose
 #   3. Installation de Dokploy (PaaS)
-#   4. Reverse proxy Caddy (HTTP + /dev → Dokploy)
+#   4. Reverse proxy Caddy (HTTPS + /dev → Dokploy)
 #   5. Lancement de tous les docker-compose dans ./docker/
 #
 # Usage : curl … | bash        (ou)  bash setup.sh
@@ -31,6 +31,7 @@ fi
 # ─── Configuration (modifiable) ─────────────────────────────────────────────
 NEW_USER="${NEW_USER:-admin}"
 SSH_PORT="${SSH_PORT:-2222}"
+DOMAIN="${DOMAIN:-mgendrot.pro}"
 DOCKER_DIR="${DOCKER_DIR:-$(cd "$(dirname "$0")" && pwd)/docker}"
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -257,8 +258,8 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════════
 log "Configuration du reverse proxy Caddy…"
 
-cat > /etc/caddy/Caddyfile << 'CADDYEOF'
-:80 {
+cat > /etc/caddy/Caddyfile << CADDYEOF
+$DOMAIN {
     # /dev → Dokploy dashboard (port 3000)
     handle_path /dev/* {
         reverse_proxy 127.0.0.1:3000
@@ -274,6 +275,8 @@ cat > /etc/caddy/Caddyfile << 'CADDYEOF'
         X-Frame-Options "SAMEORIGIN"
         X-Content-Type-Options "nosniff"
         X-XSS-Protection "1; mode=block"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        Referrer-Policy "strict-origin-when-cross-origin"
     }
 }
 CADDYEOF
@@ -281,7 +284,7 @@ CADDYEOF
 caddy validate --config /etc/caddy/Caddyfile
 
 systemctl enable --now caddy
-log "Caddy actif : /dev → Dokploy."
+log "Caddy actif : https://$DOMAIN/dev → Dokploy."
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  10.  LANCEMENT DES DOCKER-COMPOSE
@@ -339,16 +342,18 @@ ${GREEN}════════════════════════
   Firewall          : nftables (actif)
   Fail2ban          : actif
   Docker            : actif
-  Dokploy           : http://<ip>:3000 (direct)
-  Reverse proxy     : Caddy — http://<ip>/dev → Dokploy
+  Domaine           : $DOMAIN
+  HTTPS             : automatique (Let's Encrypt)
+  Dokploy           : https://$DOMAIN/dev
   Stacks docker     : $DOCKER_DIR
 
   ${YELLOW}Actions requises :${NC}
   1. Définir un mot de passe : passwd $NEW_USER
   2. Ajouter votre clé SSH dans ~${NEW_USER}/.ssh/authorized_keys
-  3. Tester la connexion SSH AVANT de fermer cette session :
-     ssh -p $SSH_PORT $NEW_USER@<ip-du-serveur>
-  4. Accéder à Dokploy : http://<ip>/dev
-  5. Placer vos docker-compose.yml dans $DOCKER_DIR/<nom>/
+  3. Vérifier que le DNS de $DOMAIN pointe vers l'IP du serveur
+  4. Tester la connexion SSH AVANT de fermer cette session :
+     ssh -p $SSH_PORT $NEW_USER@$DOMAIN
+  5. Accéder à Dokploy : https://$DOMAIN/dev
+  6. Placer vos docker-compose.yml dans $DOCKER_DIR/<nom>/
 
 EOF
