@@ -4,7 +4,7 @@
 #   1. Sécurisation (SSH, firewall, fail2ban, utilisateur sudo)
 #   2. Installation de Docker & Docker Compose
 #   3. Installation de Dokploy (PaaS)
-#   4. Reverse proxy Nginx (HTTP + /dev → Dokploy)
+#   4. Reverse proxy Caddy (HTTP + /dev → Dokploy)
 #   5. Lancement de tous les docker-compose dans ./docker/
 #
 # Usage : curl … | bash        (ou)  bash setup.sh
@@ -198,7 +198,7 @@ sysctl --system > /dev/null
 #  7.  INSTALLATION DE DOCKER
 # ═══════════════════════════════════════════════════════════════════════════════
 log "Installation de Docker…"
-pacman -S --noconfirm --needed docker docker-compose nginx
+pacman -S --noconfirm --needed docker docker-compose caddy
 
 # Ajouter l'utilisateur au groupe docker
 usermod -aG docker "$NEW_USER"
@@ -253,62 +253,35 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  9.  REVERSE PROXY NGINX
+#  9.  REVERSE PROXY CADDY
 # ═══════════════════════════════════════════════════════════════════════════════
-log "Configuration du reverse proxy Nginx…"
+log "Configuration du reverse proxy Caddy…"
 
-cat > /etc/nginx/nginx.conf << 'NGINXEOF'
-worker_processes auto;
+cat > /etc/caddy/Caddyfile << 'CADDYEOF'
+:80 {
+    # /dev → Dokploy dashboard (port 3000)
+    handle_path /dev/* {
+        reverse_proxy 127.0.0.1:3000
+    }
 
-events {
-    worker_connections 1024;
-}
+    # Racine par défaut — 404
+    handle {
+        respond "Not Found" 404
+    }
 
-http {
-    include       mime.types;
-    default_type  application/octet-stream;
-    sendfile      on;
-    keepalive_timeout 65;
-
-    # Sécurité headers
-    add_header X-Frame-Options       "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection      "1; mode=block" always;
-
-    # Taille max upload (utile pour Dokploy)
-    client_max_body_size 100m;
-
-    server {
-        listen 80 default_server;
-        listen [::]:80 default_server;
-        server_name _;
-
-        # /dev → Dokploy dashboard (port 3000)
-        location /dev/ {
-            proxy_pass         http://127.0.0.1:3000/;
-            proxy_http_version 1.1;
-            proxy_set_header   Upgrade $http_upgrade;
-            proxy_set_header   Connection "upgrade";
-            proxy_set_header   Host $host;
-            proxy_set_header   X-Real-IP $remote_addr;
-            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header   X-Forwarded-Proto $scheme;
-        }
-
-        # Racine par défaut — page d'accueil ou 404
-        location / {
-            return 404 '{"status":"not found"}\n';
-            add_header Content-Type application/json;
-        }
+    # Headers de sécurité
+    header {
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
     }
 }
-NGINXEOF
+CADDYEOF
 
-# Vérifier la config avant de démarrer
-nginx -t
+caddy validate --config /etc/caddy/Caddyfile
 
-systemctl enable --now nginx
-log "Nginx actif : /dev → Dokploy."
+systemctl enable --now caddy
+log "Caddy actif : /dev → Dokploy."
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  10.  LANCEMENT DES DOCKER-COMPOSE
@@ -367,7 +340,7 @@ ${GREEN}════════════════════════
   Fail2ban          : actif
   Docker            : actif
   Dokploy           : http://<ip>:3000 (direct)
-  Reverse proxy     : http://<ip>/dev → Dokploy
+  Reverse proxy     : Caddy — http://<ip>/dev → Dokploy
   Stacks docker     : $DOCKER_DIR
 
   ${YELLOW}Actions requises :${NC}
