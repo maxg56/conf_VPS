@@ -3,7 +3,9 @@
 # setup.sh — Configuration de base d'un VPS Arch Linux
 #   1. Sécurisation (SSH, firewall, fail2ban, utilisateur sudo)
 #   2. Installation de Docker & Docker Compose
-#   3. Lancement de tous les docker-compose dans ./docker/
+#   3. Installation de Dokploy (PaaS)
+#   4. Reverse proxy Nginx (HTTP + /dev → Dokploy)
+#   5. Lancement de tous les docker-compose dans ./docker/
 #
 # Usage : curl … | bash        (ou)  bash setup.sh
 # Doit être exécuté en root.
@@ -196,7 +198,7 @@ sysctl --system > /dev/null
 #  7.  INSTALLATION DE DOCKER
 # ═══════════════════════════════════════════════════════════════════════════════
 log "Installation de Docker…"
-pacman -S --noconfirm --needed docker docker-compose
+pacman -S --noconfirm --needed docker docker-compose nginx
 
 # Ajouter l'utilisateur au groupe docker
 usermod -aG docker "$NEW_USER"
@@ -215,7 +217,101 @@ until docker info &>/dev/null; do
 done
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  8.  LANCEMENT DES DOCKER-COMPOSE
+#  8.  INSTALLATION DE DOKPLOY
+# ═══════════════════════════════════════════════════════════════════════════════
+log "Installation de Dokploy…"
+
+if docker ps --format '{{.Names}}' | grep -q dokploy; then
+    log "Dokploy est déjà en cours d'exécution."
+else
+    docker swarm init || true
+
+    docker network create --driver overlay --attachable dokploy-network 2>/dev/null || true
+
+    mkdir -p /etc/dokploy
+
+    docker service create \
+        --name dokploy \
+        --replicas 1 \
+        --network dokploy-network \
+        --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
+        --mount type=bind,source=/etc/dokploy,target=/etc/dokploy \
+        --publish published=3000,target=3000 \
+        --update-parallelism 1 \
+        --update-order stop-first \
+        --constraint 'node.role == manager' \
+        dokploy/dokploy:latest
+
+    log "Attente du démarrage de Dokploy…"
+    for i in $(seq 1 30); do
+        if curl -sf http://localhost:3000 > /dev/null 2>&1; then
+            break
+        fi
+        sleep 2
+    done
+    log "Dokploy est accessible sur le port 3000."
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  9.  REVERSE PROXY NGINX
+# ═══════════════════════════════════════════════════════════════════════════════
+log "Configuration du reverse proxy Nginx…"
+
+cat > /etc/nginx/nginx.conf << 'NGINXEOF'
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile      on;
+    keepalive_timeout 65;
+
+    # Sécurité headers
+    add_header X-Frame-Options       "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection      "1; mode=block" always;
+
+    # Taille max upload (utile pour Dokploy)
+    client_max_body_size 100m;
+
+    server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        server_name _;
+
+        # /dev → Dokploy dashboard (port 3000)
+        location /dev/ {
+            proxy_pass         http://127.0.0.1:3000/;
+            proxy_http_version 1.1;
+            proxy_set_header   Upgrade $http_upgrade;
+            proxy_set_header   Connection "upgrade";
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+        }
+
+        # Racine par défaut — page d'accueil ou 404
+        location / {
+            return 404 '{"status":"not found"}\n';
+            add_header Content-Type application/json;
+        }
+    }
+}
+NGINXEOF
+
+# Vérifier la config avant de démarrer
+nginx -t
+
+systemctl enable --now nginx
+log "Nginx actif : /dev → Dokploy."
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  10.  LANCEMENT DES DOCKER-COMPOSE
 # ═══════════════════════════════════════════════════════════════════════════════
 launch_compose() {
     local dir="$1"
@@ -270,6 +366,8 @@ ${GREEN}════════════════════════
   Firewall          : nftables (actif)
   Fail2ban          : actif
   Docker            : actif
+  Dokploy           : http://<ip>:3000 (direct)
+  Reverse proxy     : http://<ip>/dev → Dokploy
   Stacks docker     : $DOCKER_DIR
 
   ${YELLOW}Actions requises :${NC}
@@ -277,6 +375,7 @@ ${GREEN}════════════════════════
   2. Ajouter votre clé SSH dans ~${NEW_USER}/.ssh/authorized_keys
   3. Tester la connexion SSH AVANT de fermer cette session :
      ssh -p $SSH_PORT $NEW_USER@<ip-du-serveur>
-  4. Placer vos docker-compose.yml dans $DOCKER_DIR/<nom>/
+  4. Accéder à Dokploy : http://<ip>/dev
+  5. Placer vos docker-compose.yml dans $DOCKER_DIR/<nom>/
 
 EOF
