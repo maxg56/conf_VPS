@@ -9,6 +9,16 @@
 #
 # Usage : curl … | bash        (ou)  bash setup.sh
 # Doit être exécuté en root.
+#
+# Paramètres (variables d'environnement) :
+#   NEW_USER       — nom de l'utilisateur sudo          (défaut : admin)
+#   SSH_PORT       — port SSH                           (défaut : 2222)
+#   SSH_PUBLIC_KEY — clé publique SSH à installer       (défaut : copie les clés de root)
+#   DOMAIN         — nom de domaine                     (défaut : mgendrot.pro)
+#   DOCKER_DIR     — dossier des docker-compose         (défaut : ./docker)
+#
+# Exemple :
+#   SSH_PUBLIC_KEY="ssh-ed25519 AAAA... user@host" bash setup.sh
 
 set -euo pipefail
 
@@ -31,6 +41,7 @@ fi
 # ─── Configuration (modifiable) ─────────────────────────────────────────────
 NEW_USER="${NEW_USER:-admin}"
 SSH_PORT="${SSH_PORT:-2222}"
+SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-}"
 DOMAIN="${DOMAIN:-mgendrot.pro}"
 DOCKER_DIR="${DOCKER_DIR:-$(cd "$(dirname "$0")" && pwd)/docker}"
 
@@ -84,15 +95,23 @@ apply_sshd_option "MaxAuthTries"          "3"
 apply_sshd_option "ClientAliveInterval"   "300"
 apply_sshd_option "ClientAliveCountMax"   "2"
 
-# Copier les clés SSH existantes vers le nouvel utilisateur
-if [[ -d /root/.ssh ]]; then
-    USER_HOME=$(eval echo "~$NEW_USER")
-    mkdir -p "$USER_HOME/.ssh"
+# Configurer les clés SSH pour le nouvel utilisateur
+USER_HOME=$(eval echo "~$NEW_USER")
+mkdir -p "$USER_HOME/.ssh"
+
+if [[ -n "$SSH_PUBLIC_KEY" ]]; then
+    # Utiliser uniquement la clé fournie en paramètre
+    log "Installation de la clé SSH fournie en paramètre…"
+    echo "$SSH_PUBLIC_KEY" > "$USER_HOME/.ssh/authorized_keys"
+elif [[ -f /root/.ssh/authorized_keys ]]; then
+    # Fallback : copier les clés existantes de root
+    log "Copie des clés SSH existantes depuis root…"
     cp /root/.ssh/authorized_keys "$USER_HOME/.ssh/authorized_keys" 2>/dev/null || true
-    chown -R "$NEW_USER:$NEW_USER" "$USER_HOME/.ssh"
-    chmod 700 "$USER_HOME/.ssh"
-    chmod 600 "$USER_HOME/.ssh/authorized_keys" 2>/dev/null || true
 fi
+
+chown -R "$NEW_USER:$NEW_USER" "$USER_HOME/.ssh"
+chmod 700 "$USER_HOME/.ssh"
+chmod 600 "$USER_HOME/.ssh/authorized_keys" 2>/dev/null || true
 
 systemctl restart sshd
 
@@ -339,6 +358,7 @@ ${GREEN}════════════════════════
 
   Utilisateur sudo  : $NEW_USER
   Port SSH          : $SSH_PORT
+  Clé SSH           : ${SSH_PUBLIC_KEY:+configurée}${SSH_PUBLIC_KEY:-non fournie (clés root copiées)}
   Firewall          : nftables (actif)
   Fail2ban          : actif
   Docker            : actif
@@ -349,7 +369,7 @@ ${GREEN}════════════════════════
 
   ${YELLOW}Actions requises :${NC}
   1. Définir un mot de passe : passwd $NEW_USER
-  2. Ajouter votre clé SSH dans ~${NEW_USER}/.ssh/authorized_keys
+  2. $(if [[ -z "$SSH_PUBLIC_KEY" ]]; then echo "Ajouter votre clé SSH dans ~${NEW_USER}/.ssh/authorized_keys"; else echo "Clé SSH déjà installée ✓"; fi)
   3. Vérifier que le DNS de $DOMAIN pointe vers l'IP du serveur
   4. Tester la connexion SSH AVANT de fermer cette session :
      ssh -p $SSH_PORT $NEW_USER@$DOMAIN
