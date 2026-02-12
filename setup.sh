@@ -137,7 +137,7 @@ table inet filter {
 
         # ICMP (ping)
         ip protocol icmp accept
-        ip6 nexthdr icmpv6 accept
+        meta l4proto ipv6-icmp accept
 
         # SSH
         tcp dport $SSH_PORT ct state new accept
@@ -161,7 +161,14 @@ table inet filter {
 }
 EOF
 
-systemctl enable --now nftables
+if nft -c -f /etc/nftables.conf; then
+    systemctl enable nftables
+    if ! systemctl start nftables; then
+        err "nftables n'a pas démarré. Vérifiez : journalctl -xeu nftables.service"
+    fi
+else
+    err "Erreur de syntaxe dans /etc/nftables.conf — nftables non activé."
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  5.  FAIL2BAN
