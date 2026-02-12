@@ -18,7 +18,7 @@ Script d'installation et de sécurisation automatique d'un VPS **Arch Linux**. E
 
 - Un VPS sous **Arch Linux**
 - Accès **root** (ou via `sudo`)
-- Une clé SSH déjà configurée dans `~root/.ssh/authorized_keys`
+- Une clé SSH déjà configurée dans `~root/.ssh/authorized_keys` (ou fournir `SSH_PUBLIC_KEY`)
 - Un nom de domaine pointant vers l'IP du serveur (pour le HTTPS automatique)
 
 ## Installation
@@ -33,17 +33,24 @@ bash setup.sh
 
 Le script est configurable via des variables d'environnement :
 
-| Variable     | Défaut         | Description                          |
-|--------------|----------------|--------------------------------------|
-| `NEW_USER`   | `admin`        | Nom de l'utilisateur sudo à créer    |
-| `SSH_PORT`   | `2222`         | Port SSH personnalisé                |
-| `DOMAIN`     | `mgendrot.pro` | Domaine pour Caddy (HTTPS)           |
-| `DOCKER_DIR` | `./docker`     | Répertoire des stacks Docker Compose |
+| Variable         | Défaut         | Description                                          |
+|------------------|----------------|------------------------------------------------------|
+| `NEW_USER`       | `admin`        | Nom de l'utilisateur sudo à créer                    |
+| `SSH_PORT`       | `2222`         | Port SSH personnalisé                                |
+| `SSH_PUBLIC_KEY` | *(clés root)*  | Clé publique SSH à installer (sinon copie les clés root) |
+| `DOMAIN`         | `mgendrot.pro` | Domaine pour Caddy (HTTPS)                           |
+| `DOCKER_DIR`     | `./docker`     | Répertoire des stacks Docker Compose                 |
 
 Exemple :
 
 ```bash
 NEW_USER=deploy SSH_PORT=2200 DOMAIN=example.com bash setup.sh
+```
+
+Avec une clé SSH spécifique :
+
+```bash
+SSH_PUBLIC_KEY="ssh-ed25519 AAAA... user@host" bash setup.sh
 ```
 
 ## Étapes du script
@@ -52,7 +59,7 @@ NEW_USER=deploy SSH_PORT=2200 DOMAIN=example.com bash setup.sh
 |----|------------------------------|---------------------------------------------------------------|
 | 1  | Mise à jour système          | `pacman -Syu`                                                 |
 | 2  | Utilisateur sudo             | Création du compte, ajout au groupe `wheel`                   |
-| 3  | Sécurisation SSH             | Port custom, clé uniquement, root désactivé, copie des clés   |
+| 3  | Sécurisation SSH             | Port custom, clé uniquement, root désactivé, clé fournie ou copie depuis root |
 | 4  | Firewall nftables            | Politique DROP, ouverture SSH/HTTP/HTTPS                      |
 | 5  | Fail2ban                     | Ban 1h après 5 échecs en 10 min                               |
 | 6  | Durcissement sysctl          | SYN cookies, anti-spoofing, pas de redirections ICMP          |
@@ -71,18 +78,17 @@ Internet (80/443)
        │
        ├── /dev/*  →  Dokploy (port 3000)
        └── /*      →  404
-       │
-       ▼
+
    Docker Swarm
        │
-       ▼
-   Stacks Docker Compose (./docker/)
+       ├── Dokploy (service)
+       └── Stacks Docker Compose (./docker/)
 ```
 
 ## Actions post-installation
 
 1. Définir un mot de passe pour l'utilisateur : `passwd admin`
-2. Vérifier/ajouter votre clé SSH dans `~admin/.ssh/authorized_keys`
+2. Vérifier votre clé SSH dans `~admin/.ssh/authorized_keys` (déjà installée si `SSH_PUBLIC_KEY` a été fourni)
 3. S'assurer que le DNS du domaine pointe vers l'IP du serveur
 4. Tester la connexion SSH **avant de fermer la session** :
    ```bash
